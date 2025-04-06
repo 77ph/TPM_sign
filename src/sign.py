@@ -116,6 +116,24 @@ def sign_with_key(key_id: str, message: str, eth_mode=False):
             json.dump(eth_sig, f, indent=2)
         print("[✓] Ethereum signature saved to eth_signature.json")
 
+        timestamp = datetime.utcnow().isoformat() + "Z"
+        log_id = hashlib.sha256((key_id + message).encode()).hexdigest()
+        os.makedirs("logs", exist_ok=True)
+        log_entry = {
+            "timestamp": timestamp,
+            "key_id": key_id,
+            "message_hash": "0x" + digest.hex(),
+            "r": hex(r),
+            "s": hex(s),
+            "v": v,
+            "log_id": "0x" + log_id,
+            "source": "string"
+        }
+        with open("logs/signatures.log", "a") as f:
+            f.write(json.dumps(log_entry) + "\n")
+        print("[✓] Signature logged to logs/signatures.log")
+
+
 def verify_signature(key_id: str, message: str):
     from cryptography.hazmat.primitives import hashes, serialization
     from cryptography.hazmat.primitives.asymmetric import ec, utils
