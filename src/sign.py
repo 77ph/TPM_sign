@@ -9,6 +9,36 @@ from datetime import datetime
 
 PRIMARY_HANDLE = "0x81000001"
 KEYS_DIR = "keys"
+
+# === KeyPoolManager ===
+class KeyPoolManager:
+    def __init__(self):
+        os.makedirs("cache", exist_ok=True)
+        self.cache_path = "cache/context.json"
+        self.current = None
+        self.ctx_file = "signing.ctx"
+
+        if os.path.exists(self.cache_path):
+            with open(self.cache_path, "r") as f:
+                self.current = json.load(f)
+        else:
+            self.current = {"key_id": None}
+
+    def load_key(self, key_id, pub_path, priv_path):
+        if self.current.get("key_id") == key_id and os.path.exists(self.ctx_file):
+            print(f"[*] Key '{key_id}' already loaded.")
+            return  # already loaded
+
+        if self.current.get("key_id") is not None and os.path.exists(self.ctx_file):
+            print(f"[*] Flushing previously loaded key: {self.current['key_id']}")
+            run(["tpm2_flushcontext", self.ctx_file])
+
+        print(f"[*] Loading key '{key_id}' into TPM...")
+        run(["tpm2_load", "-C", PRIMARY_HANDLE, "-u", pub_path, "-r", priv_path, "-c", self.ctx_file])
+        self.current["key_id"] = key_id
+        with open(self.cache_path, "w") as f:
+            json.dump(self.current, f)
+
 SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 
 def run(cmd, silent=False):
@@ -119,9 +149,10 @@ def sign_with_key(key_id: str, message: str, eth_mode=False):
         digest_file.write(digest)
         digest_path = digest_file.name
 
-    run(["tpm2_load", "-C", PRIMARY_HANDLE, "-u", pub_path, "-r", priv_path, "-c", "signing.ctx"])
+    keypool = KeyPoolManager()
+    keypool.load_key(key_id, pub_path, priv_path)
     run(["tpm2_sign", "-c", "signing.ctx", "-g", "sha256", "-m", digest_path, "-o", "signature.bin", "-f", "plain"])
-    run(["tpm2_flushcontext", "signing.ctx"])
+    # flush handled by KeyPoolManager (max 1 key allowed)
 
     with open("signature.bin", "rb") as f:
         sig = f.read()
@@ -204,4 +235,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
