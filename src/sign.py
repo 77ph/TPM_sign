@@ -5,10 +5,10 @@ import tempfile
 import os
 import sys
 import json
+from datetime import datetime
 
 PRIMARY_HANDLE = "0x81000001"
 KEYS_DIR = "keys"
-
 SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
 
 def run(cmd, silent=False):
@@ -27,13 +27,32 @@ def ensure_primary_key():
     run(["tpm2_evictcontrol", "-C", "o", "-c", "primary.ctx", PRIMARY_HANDLE])
 
 def create_key(key_id: str):
-    ensure_primary_key()
+    from cryptography.hazmat.primitives import serialization
     os.makedirs(KEYS_DIR, exist_ok=True)
     pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
     priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
+    meta_path = os.path.join(KEYS_DIR, f"{key_id}.meta.json")
 
     run(["tpm2_create", "-C", PRIMARY_HANDLE, "-G", "ecc", "-u", pub_path, "-r", priv_path])
     print(f"[✓] Created {pub_path} and {priv_path}")
+
+    # Save metadata hash of pubkey
+    with open(pub_path, "rb") as f:
+        pub_pem = f.read()
+    from cryptography.hazmat.primitives import serialization
+    pubkey = serialization.load_pem_public_key(pub_pem)
+    uncompressed = pubkey.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )
+    pubkey_hash = hashlib.sha256(uncompressed).hexdigest()
+    meta = {
+        "pubkey_hash": "0x" + pubkey_hash,
+        "created_at": datetime.utcnow().isoformat() + "Z"
+    }
+    with open(meta_path, "w") as f:
+        json.dump(meta, f, indent=2)
+    print(f"[✓] Metadata saved to {meta_path}")
 
 def list_keys():
     if not os.path.exists(KEYS_DIR):
@@ -44,6 +63,30 @@ def list_keys():
         if filename.endswith(".priv"):
             key_id = filename.replace(".priv", "")
             print(f"- {key_id}")
+
+def validate_key_pubhash(key_id: str):
+    meta_path = os.path.join(KEYS_DIR, f"{key_id}.meta.json")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
+
+    if not os.path.exists(meta_path):
+        print(f"[!] Missing meta file for key '{key_id}'. Cannot verify pubkey integrity.")
+        sys.exit(1)
+    meta = json.load(open(meta_path))
+
+    from cryptography.hazmat.primitives import serialization
+    with open(pub_path, "rb") as f:
+        pub_pem = f.read()
+    pubkey = serialization.load_pem_public_key(pub_pem)
+    uncompressed = pubkey.public_bytes(
+        encoding=serialization.Encoding.X962,
+        format=serialization.PublicFormat.UncompressedPoint
+    )
+    computed_hash = "0x" + hashlib.sha256(uncompressed).hexdigest()
+    if computed_hash != meta["pubkey_hash"]:
+        print("[!] Public key hash mismatch! Possible key.priv or key.pub tampering.")
+        print(f"Expected: {meta['pubkey_hash']}")
+        print(f"Got     : {computed_hash}")
+        sys.exit(1)
 
 def compute_eth_v(pubkey, message_hash, r, s):
     from eth_keys import keys
@@ -69,6 +112,8 @@ def sign_with_key(key_id: str, message: str, eth_mode=False):
         print(f"[!] Key '{key_id}' not found in {KEYS_DIR}/")
         sys.exit(1)
 
+    validate_key_pubhash(key_id)
+
     digest = hashlib.sha256(message.encode()).digest()
     with tempfile.NamedTemporaryFile("wb", delete=False) as digest_file:
         digest_file.write(digest)
@@ -84,8 +129,7 @@ def sign_with_key(key_id: str, message: str, eth_mode=False):
         s = int.from_bytes(sig[len(sig)//2:], 'big')
 
     if s > SECP256K1_N // 2:
-        print(f"[!] Signature 's' value is too high (violates Ethereum EIP-2):")
-        print(f"s = {hex(s)}")
+        print(f"[!] Signature 's' value too high (violates Ethereum EIP-2)")
         sys.exit(1)
 
     print(f"[✓] Signature (r, s):")
@@ -100,7 +144,7 @@ def sign_with_key(key_id: str, message: str, eth_mode=False):
             encoding=serialization.Encoding.X962,
             format=serialization.PublicFormat.UncompressedPoint
         )
-        uncompressed_bytes = uncompressed[1:]  # remove 0x04 prefix
+        uncompressed_bytes = uncompressed[1:]  # skip 0x04
 
         v = compute_eth_v(uncompressed_bytes, digest, r, s)
         if v is None:
@@ -133,34 +177,6 @@ def sign_with_key(key_id: str, message: str, eth_mode=False):
             f.write(json.dumps(log_entry) + "\n")
         print("[✓] Signature logged to logs/signatures.log")
 
-
-def verify_signature(key_id: str, message: str):
-    from cryptography.hazmat.primitives import hashes, serialization
-    from cryptography.hazmat.primitives.asymmetric import ec, utils
-    from cryptography.exceptions import InvalidSignature
-
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
-    if not os.path.exists(pub_path) or not os.path.exists("signature.bin"):
-        print("[!] Missing required files for verification.")
-        return
-
-    with open(pub_path, "rb") as f:
-        pem = f.read()
-    pubkey = serialization.load_pem_public_key(pem)
-
-    digest = hashlib.sha256(message.encode()).digest()
-    with open("signature.bin", "rb") as f:
-        sig = f.read()
-    r = int.from_bytes(sig[:len(sig)//2], 'big')
-    s = int.from_bytes(sig[len(sig)//2:], 'big')
-    signature = utils.encode_dss_signature(r, s)
-
-    try:
-        pubkey.verify(signature, digest, ec.ECDSA(utils.Prehashed(hashes.SHA256())))
-        print("[✓] Signature is valid.")
-    except InvalidSignature:
-        print("[!] Signature is INVALID.")
-
 def main():
     parser = argparse.ArgumentParser(description="TPM-backed signer CLI")
     subparsers = parser.add_subparsers(dest="command")
@@ -173,10 +189,6 @@ def main():
     create_parser = subparsers.add_parser("create", help="Create a new key")
     create_parser.add_argument("--key-id", required=True)
 
-    verify_parser = subparsers.add_parser("verify", help="Verify a signature")
-    verify_parser.add_argument("--key-id", required=True)
-    verify_parser.add_argument("--message", required=True)
-
     list_parser = subparsers.add_parser("list", help="List available keys")
 
     args = parser.parse_args()
@@ -185,8 +197,6 @@ def main():
         sign_with_key(args.key_id, args.message, eth_mode=args.eth)
     elif args.command == "create":
         create_key(args.key_id)
-    elif args.command == "verify":
-        verify_signature(args.key_id, args.message)
     elif args.command == "list":
         list_keys()
     else:
