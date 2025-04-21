@@ -5,7 +5,7 @@ import tempfile
 import os
 import sys
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from cryptography.hazmat.primitives import serialization
 
 PRIMARY_HANDLE = "0x81000001"
@@ -75,7 +75,7 @@ def create_key(key_id):
     pubkey_hash = hashlib.sha256(uncompressed).hexdigest()
     meta = {
         "pubkey_hash": "0x" + pubkey_hash,
-        "created_at": datetime.utcnow().isoformat() + "Z"
+        "created_at": datetime.now(timezone.utc).isoformat()
     }
     with open(meta_path, "w") as f:
         json.dump(meta, f, indent=2)
@@ -167,7 +167,7 @@ def sign_with_key(key_id, message, eth_mode=False):
         print("[✓] Ethereum signature saved to eth_signature.json")
 
         log_entry = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
             "key_id": key_id,
             "message_hash": "0x" + digest.hex(),
             "r": hex(r),
