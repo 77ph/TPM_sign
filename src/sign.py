@@ -1,121 +1,92 @@
-import argparse
-import hashlib
-import subprocess
-import tempfile
 import os
 import sys
 import json
-from datetime import datetime, timezone
+import shutil
+import hashlib
+import tempfile
+import subprocess
+from pathlib import Path
+from datetime import datetime
+from argparse import ArgumentParser
 from cryptography.hazmat.primitives import serialization
-from cryptography.hazmat.primitives.asymmetric import utils
-from eth_utils import keccak
+from cryptography.hazmat.primitives.asymmetric import ec, utils as asym_utils
+from cryptography.hazmat.backends import default_backend
+from eth_keys import keys
+from eth_utils import to_checksum_address, keccak
 
-PRIMARY_HANDLE = "0x81000001"
-KEYS_DIR = "keys"
-SECP256K1_N = int("FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16)
+SECP256K1_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
-# === KeyPoolManager ===
-class KeyPoolManager:
-    def __init__(self):
-        os.makedirs("cache", exist_ok=True)
-        self.cache_path = "cache/context.json"
-        self.current = None
-        self.ctx_file = "signing.ctx"
-        if os.path.exists(self.cache_path):
-            with open(self.cache_path, "r") as f:
-                self.current = json.load(f)
-        else:
-            self.current = {"key_id": None}
-
-    def load_key(self, key_id, pub_path, priv_path):
-        if self.current.get("key_id") == key_id and os.path.exists(self.ctx_file):
-            print(f"[*] Key '{key_id}' already loaded.")
-            return
-        if self.current.get("key_id") is not None and os.path.exists(self.ctx_file):
-            print(f"[*] Flushing previously loaded key: {self.current['key_id']}")
-            run(["tpm2_flushcontext", self.ctx_file])
-        print(f"[*] Loading key '{key_id}' into TPM...")
-        run(["tpm2_load", "-C", PRIMARY_HANDLE, "-u", pub_path, "-r", priv_path, "-c", self.ctx_file])
-        self.current["key_id"] = key_id
-        with open(self.cache_path, "w") as f:
-            json.dump(self.current, f)
-
-def run(cmd, silent=False):
-    result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    if result.returncode != 0:
+def run(cmd, **kwargs):
+    try:
+        subprocess.run(cmd, check=True, **kwargs)
+    except subprocess.CalledProcessError as e:
         print(f"[ERROR] Command failed: {' '.join(cmd)}")
-        print(result.stderr)
-        sys.exit(1)
-    return result.stdout.strip()
+        raise SystemExit(1)
 
-def ensure_primary_key():
-    output = run(["tpm2_getcap", "handles-persistent"])
-    if PRIMARY_HANDLE.lower() in output.lower():
-        return
-    run(["tpm2_createprimary", "-C", "o", "-G", "ecc", "-c", "primary.ctx"])
-    run(["tpm2_evictcontrol", "-C", "o", "-c", "primary.ctx", PRIMARY_HANDLE])
+def load_metadata(key_id):
+    meta_path = Path(f"keys/{key_id}.meta.json")
+    if not meta_path.exists():
+        return {}
+    with open(meta_path, "r") as f:
+        return json.load(f)
+
+def save_metadata(key_id, metadata):
+    meta_path = Path(f"keys/{key_id}.meta.json")
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
 
 def create_key(key_id):
-    os.makedirs(KEYS_DIR, exist_ok=True)
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
-    bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
-    priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
-    ctx_path = os.path.join(KEYS_DIR, f"{key_id}.ctx")
-    meta_path = os.path.join(KEYS_DIR, f"{key_id}.meta.json")
+    Path("keys").mkdir(exist_ok=True)
+    ctx_path = f"keys/{key_id}.tpm"
+    pub_path = f"keys/{key_id}.pub"
+    priv_path = f"keys/{key_id}.priv"
 
-    run(["tpm2_create", "-C", PRIMARY_HANDLE, "-G", "ecc", "-u", bin_pub_path, "-r", priv_path])
-    run(["tpm2_load", "-C", PRIMARY_HANDLE, "-u", bin_pub_path, "-r", priv_path, "-c", ctx_path])
+    run(["tpm2_create", "-C", "0x81000001", "-G", "ecc", "-u", pub_path, "-r", priv_path])
+    run(["tpm2_load", "-C", "0x81000001", "-u", pub_path, "-r", priv_path, "-c", ctx_path])
     run(["tpm2_readpublic", "-c", ctx_path, "-f", "pem", "-o", pub_path])
 
-    with open(pub_path, "rb") as f:
-        pub_pem = f.read()
-    pubkey = serialization.load_pem_public_key(pub_pem)
-    uncompressed = pubkey.public_bytes(
-        encoding=serialization.Encoding.X962,
-        format=serialization.PublicFormat.UncompressedPoint
-    )
-    pubkey_hash = hashlib.sha256(uncompressed).hexdigest()
-    meta = {
-        "pubkey_hash": "0x" + pubkey_hash,
-        "created_at": datetime.now(timezone.utc).isoformat()
+    metadata = {
+        "key_id": key_id,
+        "created_at": datetime.utcnow().isoformat() + "Z",
     }
-    with open(meta_path, "w") as f:
-        json.dump(meta, f, indent=2)
+    save_metadata(key_id, metadata)
     print(f"[✓] Created {pub_path} and {priv_path}")
-    print(f"[✓] Metadata saved to {meta_path}")
+    print(f"[✓] Metadata saved to keys/{key_id}.meta.json")
 
-def list_keys():
-    if not os.path.exists(KEYS_DIR):
-        print("No keys found.")
-        return
-    print("Available keys:")
-    for filename in os.listdir(KEYS_DIR):
-        if filename.endswith(".priv"):
-            print(f"- {filename.replace('.priv', '')}")
+class KeyPoolManager:
+    def __init__(self, cache_dir="cache"):
+        self.cache_dir = Path(cache_dir)
+        self.cache_dir.mkdir(exist_ok=True)
+        self.cache_file = self.cache_dir / "context.json"
+        self.state = self._load_state()
 
-def validate_key_pubhash(key_id):
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
-    meta_path = os.path.join(KEYS_DIR, f"{key_id}.meta.json")
-    if not os.path.exists(meta_path):
-        print(f"[!] Missing meta file for key '{key_id}'")
-        sys.exit(1)
-    with open(meta_path) as f:
-        meta = json.load(f)
-    with open(pub_path, "rb") as f:
-        pub_pem = f.read()
-    pubkey = serialization.load_pem_public_key(pub_pem)
-    uncompressed = pubkey.public_bytes(
-        encoding=serialization.Encoding.X962,
-        format=serialization.PublicFormat.UncompressedPoint
-    )
-    computed_hash = "0x" + hashlib.sha256(uncompressed).hexdigest()
-    if computed_hash != meta["pubkey_hash"]:
-        print("[!] Public key hash mismatch. Possible tampering.")
-        sys.exit(1)
+    def _load_state(self):
+        if self.cache_file.exists():
+            with open(self.cache_file, "r") as f:
+                return json.load(f)
+        return {}
 
+    def _save_state(self):
+        with open(self.cache_file, "w") as f:
+            json.dump(self.state, f, indent=2)
+
+    def is_loaded(self, key_id):
+        return self.state.get("current") == key_id
+
+    def load_key(self, key_id):
+        if self.is_loaded(key_id):
+            print(f"[*] Key '{key_id}' already loaded.")
+            return
+        ctx_path = f"keys/{key_id}.tpm"
+        if not Path(ctx_path).exists():
+            print(f"[!] TPM context for key '{key_id}' not found.")
+            sys.exit(1)
+        shutil.copy(ctx_path, "signing.ctx")
+        self.state["current"] = key_id
+        self._save_state()
+        print(f"[✓] Key '{key_id}' loaded into signing.ctx")
 
 def compute_eth_v(pubkey_bytes, message_hash, r, s):
-    from eth_keys import keys
     for v_try in (27, 28):
         try:
             sig = keys.Signature(r.to_bytes(32, 'big') + s.to_bytes(32, 'big') + bytes([v_try - 27]))
@@ -130,102 +101,71 @@ def compute_eth_v(pubkey_bytes, message_hash, r, s):
                 return v_try
         except Exception as e:
             print(f"[DEBUG] Exception during v={v_try}: {e}")
-            continue
     return None
 
-
 def sign_with_key(key_id, message, eth_mode=False):
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
-    bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
-    priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
+    pool = KeyPoolManager()
+    pool.load_key(key_id)
 
-    if not os.path.exists(pub_path) or not os.path.exists(priv_path):
-        print(f"[!] Key '{key_id}' not found.")
-        sys.exit(1)
+    if eth_mode:
+        eth_message = b"\x19Ethereum Signed Message:\n" + str(len(message)).encode() + message.encode()
+        digest = keccak(eth_message)
+    else:
+        digest = hashlib.sha256(message.encode()).digest()
 
-    validate_key_pubhash(key_id)
-    # digest = hashlib.sha256(message.encode()).digest()
-    eth_message = b"\x19Ethereum Signed Message:\n" + str(len(message)).encode() + message.encode()
-    digest = keccak(eth_message)
+    if int.from_bytes(digest, 'big') >= SECP256K1_N:
+        print("[!] Digest too large.")
+        return
 
+    with tempfile.NamedTemporaryFile(delete=False) as tmp_digest:
+        tmp_digest.write(digest)
+        tmp_digest_path = tmp_digest.name
 
-    keypool = KeyPoolManager()
-    keypool.load_key(key_id, bin_pub_path, priv_path)
-
-    with tempfile.NamedTemporaryFile("wb", delete=False) as f:
-        f.write(digest)
-        digest_path = f.name
-
-    run(["tpm2_sign", "-c", keypool.ctx_file, "--digest", digest_path, "-o", "signature.bin", "-f", "plain"], silent=False)
-    os.remove(digest_path)
+    run(["tpm2_sign", "-c", "signing.ctx", "--digest", tmp_digest_path, "-o", "signature.bin", "-f", "plain"])
+    os.unlink(tmp_digest_path)
 
     with open("signature.bin", "rb") as f:
         sig = f.read()
-    r, s = utils.decode_dss_signature(sig)
+    r, s = asym_utils.decode_dss_signature(sig)
 
-    if s > SECP256K1_N // 2:
-        print("[!] Signature 's' is too high for Ethereum (EIP-2).")
-        sys.exit(1)
-
-    print(f"[✓] Signature: r={hex(r)} s={hex(s)}")
+    print(f"[✓] Signature: r=0x{r:064x} s=0x{s:064x}")
 
     if eth_mode:
+        if s > SECP256K1_N // 2:
+            print("[!] Signature 's' is too high for Ethereum (EIP-2).")
+            return
+
+        pub_path = f"keys/{key_id}.pub"
         with open(pub_path, "rb") as f:
-            pub_pem = f.read()
-        pubkey = serialization.load_pem_public_key(pub_pem)
-        uncompressed = pubkey.public_bytes(
-            encoding=serialization.Encoding.X962,
-            format=serialization.PublicFormat.UncompressedPoint
-        )[1:]
+            pubkey = serialization.load_pem_public_key(f.read(), backend=default_backend())
+        pub_numbers = pubkey.public_numbers()
+        uncompressed = b"\x04" + pub_numbers.x.to_bytes(32, 'big') + pub_numbers.y.to_bytes(32, 'big')
         v = compute_eth_v(uncompressed, digest, r, s)
         if v is None:
             print("[!] Could not determine Ethereum-compatible v.")
             sys.exit(1)
-        sig_json = {"r": hex(r), "s": hex(s), "v": v}
-        with open("eth_signature.json", "w") as f:
-            json.dump(sig_json, f, indent=2)
-        print("[✓] Ethereum signature saved to eth_signature.json")
-
-        log_entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "key_id": key_id,
-            "message_hash": "0x" + digest.hex(),
-            "r": hex(r),
-            "s": hex(s),
-            "v": v,
-            "source": "string",
-        }
-        os.makedirs("logs", exist_ok=True)
-        with open("logs/signatures.log", "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
-        print("[✓] Logged to logs/signatures.log")
+        print(f"[✓] Ethereum Signature: r=0x{r:064x}, s=0x{s:064x}, v={v}")
 
 def main():
-    parser = argparse.ArgumentParser()
+    parser = ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
 
-    p_create = subparsers.add_parser("create")
-    p_create.add_argument("--key-id", required=True)
+    create = subparsers.add_parser("create")
+    create.add_argument("--key-id", required=True)
 
-    p_sign = subparsers.add_parser("sign")
-    p_sign.add_argument("--key-id", required=True)
-    p_sign.add_argument("--message", required=True)
-    p_sign.add_argument("--eth", action="store_true")
-
-    p_list = subparsers.add_parser("list")
+    sign = subparsers.add_parser("sign")
+    sign.add_argument("--key-id", required=True)
+    sign.add_argument("--message", required=True)
+    sign.add_argument("--eth", action="store_true")
 
     args = parser.parse_args()
-    ensure_primary_key()
 
     if args.command == "create":
         create_key(args.key_id)
     elif args.command == "sign":
         sign_with_key(args.key_id, args.message, eth_mode=args.eth)
-    elif args.command == "list":
-        list_keys()
     else:
         parser.print_help()
 
 if __name__ == "__main__":
     main()
-

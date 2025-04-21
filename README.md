@@ -101,3 +101,12 @@ This document describes a scalable and reboot-resilient architecture for signing
 - Signer REST API with key pool loader
 - Key rotation and indexing
 - PCR-based sealing for specific boot states
+
+## Not compatible with secp256k1
+```
+sudo tpm2_getcap ecc-curves
+TPM2_ECC_NIST_P256: 0x3
+TPM2_ECC_NIST_P384: 0x4
+TPM2_ECC_BN_P256: 0x10
+TPM2_ECC_SM2_P256: 0x20
+```
