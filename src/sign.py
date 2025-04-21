@@ -145,7 +145,7 @@ def sign_with_key(key_id, message, eth_mode=False):
         msgfile.write(message)
         msg_path = msgfile.name
 
-    run(["tpm2_sign", "-c", keypool.ctx_file, "-g", "sha256", "-m", msg_path, "-o", "signature.bin", "-f", "plain"], silent=False,)
+    run(["tpm2_sign", "-c", keypool.ctx_file, "-g", "sha256", "-M", msg_path, "-o", "signature.bin", "-f", "plain"], silent=False,)
     os.remove(msg_path)
 
 
