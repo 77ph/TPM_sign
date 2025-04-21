@@ -135,19 +135,13 @@ def sign_with_key(key_id, message, eth_mode=False):
         sys.exit(1)
 
     validate_key_pubhash(key_id)
-    digest = hashlib.sha256(message.encode()).digest()
+            digest = hashlib.sha256(message.encode()).digest()
+        with tempfile.NamedTemporaryFile("wb", delete=False) as f:
+            f.write(digest)
+            digest_path = f.name
 
-    keypool = KeyPoolManager()
-    keypool.load_key(key_id, bin_pub_path, priv_path)
-
-    
-        digest = hashlib.sha256(message.encode()).digest()
-    with tempfile.NamedTemporaryFile("wb", delete=False) as f:
-        f.write(digest)
-        digest_path = f.name
-
-    run(["tpm2_sign", "-c", keypool.ctx_file, "--digest", digest_path, "-o", "signature.bin", "-f", "plain"], silent=False)
-    os.remove(digest_path)
+        run(["tpm2_sign", "-c", keypool.ctx_file, "--digest", digest_path, "-o", "signature.bin", "-f", "plain"], silent=False)
+        os.remove(digest_path)
 
 
     with open("signature.bin", "rb") as f:
