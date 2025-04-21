@@ -55,7 +55,7 @@ def ensure_primary_key():
 
 def create_key(key_id):
     os.makedirs(KEYS_DIR, exist_ok=True)
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
     priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
     bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
     ctx_path = os.path.join(KEYS_DIR, f"{key_id}.ctx")
@@ -92,7 +92,7 @@ def list_keys():
             print(f"- {filename.replace('.priv', '')}")
 
 def validate_key_pubhash(key_id):
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
     meta_path = os.path.join(KEYS_DIR, f"{key_id}.meta.json")
     if not os.path.exists(meta_path):
         print(f"[!] Missing meta file for key '{key_id}'")
@@ -123,7 +123,7 @@ def compute_eth_v(pubkey_bytes, message_hash, r, s):
     return None
 
 def sign_with_key(key_id, message, eth_mode=False):
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
     priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
 
     if not os.path.exists(pub_path) or not os.path.exists(priv_path):
@@ -208,4 +208,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
