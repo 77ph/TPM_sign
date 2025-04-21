@@ -55,9 +55,11 @@ def ensure_primary_key():
 
 def create_key(key_id):
     os.makedirs(KEYS_DIR, exist_ok=True)
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
-    priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
     bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
+    priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
+    bin_bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
     ctx_path = os.path.join(KEYS_DIR, f"{key_id}.ctx")
     meta_path = os.path.join(KEYS_DIR, f"{key_id}.meta.json")
 
@@ -92,7 +94,8 @@ def list_keys():
             print(f"- {filename.replace('.priv', '')}")
 
 def validate_key_pubhash(key_id):
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
+    bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
     meta_path = os.path.join(KEYS_DIR, f"{key_id}.meta.json")
     if not os.path.exists(meta_path):
         print(f"[!] Missing meta file for key '{key_id}'")
@@ -123,7 +126,8 @@ def compute_eth_v(pubkey_bytes, message_hash, r, s):
     return None
 
 def sign_with_key(key_id, message, eth_mode=False):
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
+    bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
+    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
     priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
 
     if not os.path.exists(pub_path) or not os.path.exists(priv_path):
@@ -134,7 +138,7 @@ def sign_with_key(key_id, message, eth_mode=False):
     digest = hashlib.sha256(message.encode()).digest()
 
     keypool = KeyPoolManager()
-    keypool.load_key(key_id, pub_path, priv_path)
+    keypool.load_key(key_id, bin_pub_path, priv_path)
 
     run(["tpm2_sign", "-c", keypool.ctx_file, "-g", "sha256", "-m", "-", "-o", "signature.bin", "-f", "plain"], silent=False,)
 
@@ -208,3 +212,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
