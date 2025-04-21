@@ -125,68 +125,7 @@ def compute_eth_v(pubkey_bytes, message_hash, r, s):
             continue
     return None
 
-def sign_with_key(key_id, message, eth_mode=False):
-    bin_pub_path = os.path.join(KEYS_DIR, f"{key_id}.binpub")
-    pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
-    priv_path = os.path.join(KEYS_DIR, f"{key_id}.priv")
-
-    if not os.path.exists(pub_path) or not os.path.exists(priv_path):
-        print(f"[!] Key '{key_id}' not found.")
-        sys.exit(1)
-
-    validate_key_pubhash(key_id)
-            digest = hashlib.sha256(message.encode()).digest()
-        with tempfile.NamedTemporaryFile("wb", delete=False) as f:
-            f.write(digest)
-            digest_path = f.name
-
-        run(["tpm2_sign", "-c", keypool.ctx_file, "--digest", digest_path, "-o", "signature.bin", "-f", "plain"], silent=False)
-        os.remove(digest_path)
-
-
-    with open("signature.bin", "rb") as f:
-        sig = f.read()
-        r = int.from_bytes(sig[:len(sig)//2], 'big')
-        s = int.from_bytes(sig[len(sig)//2:], 'big')
-
-    if s > SECP256K1_N // 2:
-        print("[!] Signature 's' is too high for Ethereum (EIP-2).")
-        sys.exit(1)
-
-    print(f"[✓] Signature: r={hex(r)} s={hex(s)}")
-
-    if eth_mode:
-        with open(pub_path, "rb") as f:
-            pub_pem = f.read()
-        pubkey = serialization.load_pem_public_key(pub_pem)
-        uncompressed = pubkey.public_bytes(
-            encoding=serialization.Encoding.X962,
-            format=serialization.PublicFormat.UncompressedPoint
-        )[1:]
-        v = compute_eth_v(uncompressed, digest, r, s)
-        if v is None:
-            print("[!] Could not determine Ethereum-compatible v.")
-            sys.exit(1)
-        sig_json = {"r": hex(r), "s": hex(s), "v": v}
-        with open("eth_signature.json", "w") as f:
-            json.dump(sig_json, f, indent=2)
-        print("[✓] Ethereum signature saved to eth_signature.json")
-
-        log_entry = {
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "key_id": key_id,
-            "message_hash": "0x" + digest.hex(),
-            "r": hex(r),
-            "s": hex(s),
-            "v": v,
-            "source": "string",
-        }
-        os.makedirs("logs", exist_ok=True)
-        with open("logs/signatures.log", "a") as f:
-            f.write(json.dumps(log_entry) + "\n")
-        print("[✓] Logged to logs/signatures.log")
-
-def main():
+main():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
 
