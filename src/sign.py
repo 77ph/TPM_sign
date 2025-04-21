@@ -112,16 +112,26 @@ def validate_key_pubhash(key_id):
         print("[!] Public key hash mismatch. Possible tampering.")
         sys.exit(1)
 
+
 def compute_eth_v(pubkey_bytes, message_hash, r, s):
     from eth_keys import keys
     for v_try in (27, 28):
         try:
             sig = keys.Signature(r.to_bytes(32, 'big') + s.to_bytes(32, 'big') + bytes([v_try - 27]))
-            if sig.recover_public_key_from_msg_hash(message_hash).to_bytes() == pubkey_bytes:
+            recovered = sig.recover_public_key_from_msg_hash(message_hash)
+            print(f"[DEBUG] Trying v={v_try}")
+            print(f"[DEBUG] r=0x{r:064x}")
+            print(f"[DEBUG] s=0x{s:064x}")
+            print(f"[DEBUG] digest=0x{message_hash.hex()}")
+            print(f"[DEBUG] pubkey_bytes=0x{pubkey_bytes.hex()}")
+            print(f"[DEBUG] recovered=0x{recovered.to_bytes().hex()}")
+            if recovered.to_bytes() == pubkey_bytes:
                 return v_try
-        except:
+        except Exception as e:
+            print(f"[DEBUG] Exception during v={v_try}: {e}")
             continue
     return None
+
 
 def sign_with_key(key_id, message, eth_mode=False):
     pub_path = os.path.join(KEYS_DIR, f"{key_id}.pub")
@@ -214,5 +224,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
