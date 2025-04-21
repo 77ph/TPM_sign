@@ -125,7 +125,7 @@ def compute_eth_v(pubkey_bytes, message_hash, r, s):
             continue
     return None
 
-main():
+def main():
     parser = argparse.ArgumentParser()
     subparsers = parser.add_subparsers(dest="command")
 
