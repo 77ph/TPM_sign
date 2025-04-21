@@ -8,6 +8,7 @@ import json
 from datetime import datetime, timezone
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import utils
+from eth_utils import keccak
 
 PRIMARY_HANDLE = "0x81000001"
 KEYS_DIR = "keys"
@@ -143,7 +144,10 @@ def sign_with_key(key_id, message, eth_mode=False):
         sys.exit(1)
 
     validate_key_pubhash(key_id)
-    digest = hashlib.sha256(message.encode()).digest()
+    # digest = hashlib.sha256(message.encode()).digest()
+    eth_message = b"\x19Ethereum Signed Message:\n" + str(len(message)).encode() + message.encode()
+    digest = keccak(eth_message)
+
 
     keypool = KeyPoolManager()
     keypool.load_key(key_id, bin_pub_path, priv_path)
