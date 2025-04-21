@@ -7,6 +7,7 @@ import sys
 import json
 from datetime import datetime, timezone
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import utils
 
 PRIMARY_HANDLE = "0x81000001"
 KEYS_DIR = "keys"
@@ -146,8 +147,7 @@ def sign_with_key(key_id, message, eth_mode=False):
 
     with open("signature.bin", "rb") as f:
         sig = f.read()
-        r = int.from_bytes(sig[:len(sig)//2], 'big')
-        s = int.from_bytes(sig[len(sig)//2:], 'big')
+    r, s = utils.decode_dss_signature(sig)
 
     if s > SECP256K1_N // 2:
         print("[!] Signature 's' is too high for Ethereum (EIP-2).")
@@ -214,4 +214,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
